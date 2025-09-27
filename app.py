@@ -565,7 +565,7 @@ if st.session_state.search_results and st.button("Re-run Answer with Current LLM
                 prompt,
                 mode="offline" if llm_mode == "Offline (Ollama)" else "online"
             )
-        st.experimental_rerun()
+        
 
 # =========================================================
 # Debug Info (Optional)
