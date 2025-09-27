@@ -9,6 +9,7 @@ try:
 except Exception:
     collection = client.create_collection(COLLECTION_NAME)
 
+
 def add_text_items(items: List[dict], embeddings: List[list]):
     ids = [it["id"] for it in items]
     docs = [it["text"] for it in items]
@@ -22,26 +23,29 @@ def add_text_items(items: List[dict], embeddings: List[list]):
         if it.get("type") == "audio_segment":
             md["start"] = it.get("start")
             md["end"] = it.get("end")
-        # Removing any None values ( for ChromaDB)
+        # image_text behaves like normal text → no special handling
         md = {k: v for k, v in md.items() if v is not None}
         metadatas.append(md)
     collection.add(ids=ids, documents=docs, metadatas=metadatas, embeddings=embeddings)
 
+
 def add_image_item(id: str, embedding: list, meta: dict):
-    # Removing None values from meta just in case
     meta = {k: v for k, v in meta.items() if v is not None}
     collection.add(ids=[id], embeddings=[embedding], metadatas=[meta], documents=[None])
+
 
 def query_by_embedding(embedding: list, k: int = config.TOP_K):
     res = collection.query(query_embeddings=[embedding], n_results=k)
     return res
 
+
 def query_by_text_embedding(emb: list, k: int = config.TOP_K):
     return query_by_embedding(emb, k)
+
 
 def get_all_items():
     return collection.get()
 
+
 def persist():
-    # No-op: Persistence is handled automatically by PersistentClient
-    pass
+    pass  # Persistence is automatic with PersistentClient
