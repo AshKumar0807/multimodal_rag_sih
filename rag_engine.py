@@ -1,9 +1,8 @@
 import chromadb
-from chromadb.config import Settings
 from typing import List
 import config
 
-client = chromadb.Client(Settings(chroma_db_impl="duckdb+parquet", persist_directory=config.CHROMA_DIR))
+client = chromadb.PersistentClient(path=config.CHROMA_DIR)
 COLLECTION_NAME = "multimodal"
 try:
     collection = client.get_collection(COLLECTION_NAME)
@@ -26,7 +25,7 @@ def add_image_item(id: str, embedding: list, meta: dict):
     collection.add(ids=[id], embeddings=[embedding], metadatas=[meta], documents=[None])
 
 def query_by_embedding(embedding: list, k: int = config.TOP_K):
-    res = collection.query(embeddings=[embedding], n_results=k)
+    res = collection.query(query_embeddings=[embedding], n_results=k)
     return res
 
 def query_by_text_embedding(emb: list, k: int = config.TOP_K):
@@ -37,4 +36,3 @@ def get_all_items():
 
 def persist():
     client.persist()
-

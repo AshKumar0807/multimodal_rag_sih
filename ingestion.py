@@ -7,8 +7,10 @@ from sentence_transformers import SentenceTransformer
 import whisper
 from utils import make_id
 import config
+import ssl
 
 # models loaded once
+ssl._create_default_https_context = ssl._create_unverified_context
 embed_model = SentenceTransformer(config.EMBEDDING_MODEL)
 whisper_model = whisper.load_model("base")  # change model size if needed
 
