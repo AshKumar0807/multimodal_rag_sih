@@ -37,8 +37,8 @@ except ImportError:
 # ---------------------------------------------------------------------
 # Page Setup
 # ---------------------------------------------------------------------
-st.set_page_config(page_title="Multimodal RAG MVP — Hybrid", layout="wide")
-st.title("Multimodal RAG — Offline & Online Hybrid MVP")
+st.set_page_config(page_title="Atlas", layout="wide")
+st.title("Atlas — Multimodal RAG")
 
 # ---------------------------------------------------------------------
 # Constants / Config
