@@ -9,10 +9,10 @@ from utils import make_id
 import config
 import ssl
 
-# models loaded once
+#load
 ssl._create_default_https_context = ssl._create_unverified_context
 embed_model = SentenceTransformer(config.EMBEDDING_MODEL)
-whisper_model = whisper.load_model("base")  # change model size if needed
+whisper_model = whisper.load_model("base")  # change model size accordingly
 
 def extract_text_from_pdf(path: str) -> List[Dict]:
     reader = PdfReader(path)
@@ -20,26 +20,31 @@ def extract_text_from_pdf(path: str) -> List[Dict]:
     for i, page in enumerate(reader.pages):
         text = page.extract_text() or ""
         if text.strip():
-            items.append({
+            md = {
                 "id": make_id("pdf", f"{os.path.basename(path)}_p{i}"),
                 "text": text,
                 "source": os.path.basename(path),
                 "page": i + 1,
                 "type": "text"
-            })
+            }
+            # Removing None values just in case
+            md = {k: v for k, v in md.items() if v is not None}
+            items.append(md)
     return items
 
 def extract_text_from_docx(path: str) -> List[Dict]:
     text = docx2txt.process(path) or ""
     items = []
     if text.strip():
-        items.append({
+        md = {
             "id": make_id("docx", os.path.basename(path)),
             "text": text,
             "source": os.path.basename(path),
-            "page": None,
+            # "page": None,  #Don't include if None
             "type": "text"
-        })
+        }
+        md = {k: v for k, v in md.items() if v is not None}
+        items.append(md)
     return items
 
 def transcribe_audio_to_segments(path: str) -> List[Dict]:
@@ -51,14 +56,16 @@ def transcribe_audio_to_segments(path: str) -> List[Dict]:
         end = float(seg.get("end", 0.0))
         text = seg.get("text", "").strip()
         if text:
-            items.append({
+            md = {
                 "id": make_id("audio", f"{os.path.basename(path)}_{int(start)}_{int(end)}"),
                 "text": text,
                 "source": os.path.basename(path),
                 "start": start,
                 "end": end,
                 "type": "audio_segment"
-            })
+            }
+            md = {k: v for k, v in md.items() if v is not None}
+            items.append(md)
     return items
 
 def embed_texts(text_items: List[Dict]) -> List[List[float]]:

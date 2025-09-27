@@ -14,14 +14,22 @@ def add_text_items(items: List[dict], embeddings: List[list]):
     docs = [it["text"] for it in items]
     metadatas = []
     for it in items:
-        md = {"source": it.get("source"), "page": it.get("page"), "type": it.get("type")}
+        md = {
+            "source": it.get("source"),
+            "page": it.get("page"),
+            "type": it.get("type")
+        }
         if it.get("type") == "audio_segment":
             md["start"] = it.get("start")
             md["end"] = it.get("end")
+        # Removing any None values ( for ChromaDB)
+        md = {k: v for k, v in md.items() if v is not None}
         metadatas.append(md)
     collection.add(ids=ids, documents=docs, metadatas=metadatas, embeddings=embeddings)
 
 def add_image_item(id: str, embedding: list, meta: dict):
+    # Removing None values from meta just in case
+    meta = {k: v for k, v in meta.items() if v is not None}
     collection.add(ids=[id], embeddings=[embedding], metadatas=[meta], documents=[None])
 
 def query_by_embedding(embedding: list, k: int = config.TOP_K):
@@ -35,4 +43,5 @@ def get_all_items():
     return collection.get()
 
 def persist():
-    client.persist()
+    # No-op: Persistence is handled automatically by PersistentClient
+    pass

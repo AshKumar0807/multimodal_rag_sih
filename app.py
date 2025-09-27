@@ -1,6 +1,6 @@
 import streamlit as st
 from ingestion import extract_text_from_pdf, extract_text_from_docx, transcribe_audio_to_segments, embed_texts, embed_image, get_image_exif, whisper_model
-from rag_engine import add_text_items, add_image_item, query_by_text_embedding, persist, get_all_items
+from rag_engine import add_text_items, add_image_item, query_by_text_embedding, get_all_items
 from utils import save_uploaded_file, make_id
 import config, os, base64, tempfile, numpy as np, soundfile as sf
 from ollama_client import run_prompt
@@ -68,9 +68,23 @@ webrtc_ctx = webrtc_streamer(key="voice-query", mode=WebRtcMode.SENDONLY, audio_
 
 if webrtc_ctx.audio_processor:
     if st.button("Transcribe Voice"):
+        # Clear any previous frames before new transcription
+        # webrtc_ctx.audio_processor.frames = []
+
+        # Wait for new frames to fill (user should speak after clicking)
+        st.info("Recording... Please speak into your microphone.")
+        # After recording, process as before
         data = np.concatenate(webrtc_ctx.audio_processor.frames, axis=0)
+        if data.ndim == 2 and data.shape[1] == 1:
+            data = data[:, 0]
+        if data.dtype not in [np.float32, np.int16]:
+            data = data.astype(np.float32)
+        audio_flat = data.flatten()
+
         tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        sf.write(tmp.name, data, 16000)
+        sf.write(tmp.name, audio_flat, 16000 , format='WAV')
+        st.write("Shape:", data.shape, "Dtype:", data.dtype)
+        st.audio(tmp.name, format="audio/wav")
         result = whisper_model.transcribe(tmp.name)
         transcript = result.get("text", "")
         st.text_area("Transcript", value=transcript, height=100)
@@ -90,23 +104,26 @@ if st.button("Search") and query_text.strip():
     docs_to_use = docs[:TOP_N]
     metas_to_use = metas[:TOP_N]
 
-    st.subheader("Results & Citations")
-    for i, (doc, meta) in enumerate(zip(docs_to_use, metas_to_use), start=1):
-        st.markdown(f"**[{i}] Source:** {meta.get('source')}")
-        if meta.get("type") == "text":
-            st.write(doc)
-        elif meta.get("type") == "audio_segment":
-            st.write(f"Transcript: {doc}")
-            st.audio(os.path.join(config.DATA_DIR, meta.get("source")), format="audio/wav", start_time=meta.get("start",0))
-            st.write(f"Time: {meta.get('start'):.2f}s → {meta.get('end'):.2f}s")
-        elif meta.get("type") == "image":
-            st.image(os.path.join(config.DATA_DIR, meta.get("source")))
-            st.json(meta.get("exif", {}))
+    if not docs_to_use:
+        st.warning("No relevant results found for your query.")
+    else:
+        st.subheader("Results & Citations")
+        for i, (doc, meta) in enumerate(zip(docs_to_use, metas_to_use), start=1):
+            st.markdown(f"**[{i}] Source:** {meta.get('source')}")
+            if meta.get("type") == "text":
+                st.write(doc)
+            elif meta.get("type") == "audio_segment":
+                st.write(f"Transcript: {doc}")
+                st.audio(os.path.join(config.DATA_DIR, meta.get("source")), format="audio/wav", start_time=meta.get("start",0))
+                st.write(f"Time: {meta.get('start'):.2f}s → {meta.get('end'):.2f}s")
+            elif meta.get("type") == "image":
+                st.image(os.path.join(config.DATA_DIR, meta.get("source")))
+                st.json(meta.get("exif", {}))
 
-    # Generate LLM answer using only top N context
-    with st.spinner("Generating answer via LLM..."):
-        context = "\n".join([str(d) for d in docs_to_use if d])
-        prompt = f"Answer the question based on the following context:\n{context}\nQuestion: {query_text}"
-        answer = run_prompt(prompt, mode="offline" if llm_mode=="Offline (Ollama)" else "online")
-        st.subheader("LLM Answer")
-        st.write(answer)
+        # Generate LLM answer using only top N context
+        with st.spinner("Generating answer via LLM..."):
+            context = "\n".join([str(d) for d in docs_to_use if d])
+            prompt = f"Answer the question based on the following context:\n{context}\nQuestion: {query_text}"
+            answer = run_prompt(prompt, mode="offline" if llm_mode=="Offline (Ollama)" else "online")
+            st.subheader("LLM Answer")
+            st.write(answer)
