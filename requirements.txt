@@ -1,0 +1,16 @@
+streamlit
+chromadb
+sentence-transformers
+torch
+torchvision
+openai
+openai-whisper
+PyPDF2
+python-docx
+Pillow
+python-dotenv
+tqdm
+streamlit-webrtc
+av
+numpy
+soundfile
