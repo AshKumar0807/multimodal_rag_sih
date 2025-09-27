@@ -31,4 +31,4 @@ Quickstart:
    streamlit run app.py
 6. Ingest files from the sidebar, then ask queries or use live recorder/upload an audio query.
 
-NOTE: you must have ffmpeg installed in your system path
+NOTE: you must have ffmpeg,tesseract installed in your system path
