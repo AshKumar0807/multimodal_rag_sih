@@ -37,8 +37,8 @@ from ollama_client import run_prompt
 # =========================================================
 # Page Setup
 # =========================================================
-st.set_page_config(page_title="Multimodal RAG MVP — Hybrid", layout="wide")
-st.title("📚 Multimodal RAG — Offline & Online Hybrid MVP")
+st.set_page_config(page_title="T-RAG", layout="wide")
+st.title("Multimodal RAG — Offline & Online Hybrid")
 
 # =========================================================
 # Helpers for Safe Metadata (EXIF) Flattening
@@ -552,6 +552,7 @@ if st.session_state.search_results is not None:
 # =========================================================
 # Re-run Answer With Different LLM Mode
 # =========================================================
+<<<<<<< HEAD
 if st.session_state.search_results and st.button("Re-run Answer with Current LLM Mode"):
     context = st.session_state.context_used or ""
     query_text = st.session_state.search_results.get("query", "")
@@ -566,6 +567,22 @@ if st.session_state.search_results and st.button("Re-run Answer with Current LLM
                 mode="offline" if llm_mode == "Offline (Ollama)" else "online"
             )
         
+=======
+# if st.session_state.search_results and st.button("Re-run Answer with Current LLM Mode"):
+#     context = st.session_state.context_used or ""
+#     query_text = st.session_state.search_results.get("query", "")
+#     if query_text:
+#         prompt = (
+#             f"Answer the question based on the following context:\n{context}\n"
+#             f"Question: {query_text}"
+#         )
+#         with st.spinner("Re-generating answer..."):
+#             st.session_state.answer = run_prompt(
+#                 prompt,
+#                 mode="offline" if llm_mode == "Offline (Ollama)" else "online"
+#             )
+#         st.experimental_rerun()
+>>>>>>> c09910d (app)
 
 # =========================================================
 # Debug Info (Optional)
