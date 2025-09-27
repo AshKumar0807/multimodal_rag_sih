@@ -9,12 +9,11 @@ from collections import deque
 
 import numpy as np
 import soundfile as sf
-import av  # required for streamlit-webrtc queued audio frames
+import av
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 
-# Local project imports (assumed existing in your repo)
 import config
 from ingestion import (
     extract_text_from_pdf,
@@ -23,7 +22,7 @@ from ingestion import (
     embed_texts,
     embed_image,
     get_image_exif,
-    whisper_model,  # Should expose .transcribe()
+    whisper_model,
 )
 from rag_engine import (
     add_text_items,
@@ -33,17 +32,10 @@ from rag_engine import (
 from utils import save_uploaded_file, make_id
 from ollama_client import run_prompt
 
-
-# =========================================================
-# Page Setup
-# =========================================================
 st.set_page_config(page_title="Multimodal RAG MVP — Hybrid", layout="wide")
 st.title("📚 Multimodal RAG — Offline & Online Hybrid MVP")
 
-# =========================================================
-# Helpers for Safe Metadata (EXIF) Flattening
-# =========================================================
-MAX_METADATA_STR_LEN = 500  # truncate long stringified values
+MAX_METADATA_STR_LEN = 500
 SKIP_KEYS = {
     "MakerNote",
     "ThumbnailData",
@@ -52,28 +44,16 @@ SKIP_KEYS = {
 }
 
 def normalize_metadata_value(v):
-    """
-    Convert arbitrary EXIF / metadata values to Chroma-compatible scalar (str|int|float|bool|None).
-    - Bytes -> UTF-8 (fallback hex)
-    - Lists / tuples / sets -> comma-joined string (truncated elements)
-    - Dicts -> JSON string
-    - Other objects -> str()
-    Returns None if value should be skipped.
-    """
     if v is None:
         return None
-
     if isinstance(v, (int, float, bool)):
         return v
-
     if isinstance(v, bytes):
         try:
             v = v.decode("utf-8", errors="replace")
         except Exception:
             v = v.hex()
-
     elif isinstance(v, (list, tuple, set)):
-        # Only keep short sequences
         if len(v) > 25:
             return None
         coerced = []
@@ -88,26 +68,17 @@ def normalize_metadata_value(v):
             else:
                 coerced.append(str(item)[:50])
         v = ",".join(coerced)
-
     elif isinstance(v, dict):
-        # Convert nested dict safely
         try:
             v = json.dumps(v, ensure_ascii=False)
         except Exception:
             v = str(v)
-
     else:
         v = str(v)
-
     if isinstance(v, str) and len(v) > MAX_METADATA_STR_LEN:
         v = v[:MAX_METADATA_STR_LEN] + "…"
-
     return v
 
-
-# =========================================================
-# Sidebar: LLM Mode & Ingestion
-# =========================================================
 st.sidebar.header("LLM Mode")
 llm_mode = st.sidebar.radio("Select LLM:", ["Offline (Ollama)", "Online (OpenAI)"])
 
@@ -152,18 +123,20 @@ if st.sidebar.button("Ingest Selected Files", disabled=not uploads):
         progress = st.sidebar.progress(0)
         status = st.sidebar.empty()
 
-        # PDFs
         for f in file_groups["pdf"]:
             path = save_uploaded_file(f, config.DATA_DIR)
             items = extract_text_from_pdf(path)
-            if items:
-                embs = embed_texts(items)
-                add_text_items(items, embs)
+            text_items = [it for it in items if "text" in it]
+            img_items = [it for it in items if "embedding" in it]
+            if text_items:
+                embs = embed_texts(text_items)
+                add_text_items(text_items, embs)
+            for img in img_items:
+                add_image_item(img["metadata"]["id"], img["embedding"], img["metadata"])
             processed += 1
             progress.progress(processed / total)
             status.markdown(f"Ingested PDF: **{f.name}**")
 
-        # DOCX
         for f in file_groups["docx"]:
             path = save_uploaded_file(f, config.DATA_DIR)
             items = extract_text_from_docx(path)
@@ -174,7 +147,6 @@ if st.sidebar.button("Ingest Selected Files", disabled=not uploads):
             progress.progress(processed / total)
             status.markdown(f"Ingested DOCX: **{f.name}**")
 
-        # Images
         for f in file_groups["image"]:
             path = save_uploaded_file(f, config.DATA_DIR)
             emb = embed_image(path)
@@ -183,7 +155,6 @@ if st.sidebar.button("Ingest Selected Files", disabled=not uploads):
                 "source": f.name,
                 "type": "image",
             }
-            # Flatten EXIF
             for k, v in raw_exif.items():
                 if k in SKIP_KEYS:
                     continue
@@ -195,7 +166,6 @@ if st.sidebar.button("Ingest Selected Files", disabled=not uploads):
             progress.progress(processed / total)
             status.markdown(f"Ingested Image: **{f.name}**")
 
-        # Audio
         for f in file_groups["audio"]:
             path = save_uploaded_file(f, config.DATA_DIR)
             segments = transcribe_audio_to_segments(path)
@@ -208,16 +178,10 @@ if st.sidebar.button("Ingest Selected Files", disabled=not uploads):
 
     st.success("Ingestion complete!")
 
-# =========================================================
-# Cached Resources
-# =========================================================
 @st.cache_resource(show_spinner=False)
 def get_embed_model():
     return SentenceTransformer(config.EMBEDDING_MODEL)
 
-# =========================================================
-# Session State Initialization
-# =========================================================
 SESSION_DEFAULTS = {
     "search_results": None,
     "answer": None,
@@ -229,17 +193,12 @@ SESSION_DEFAULTS = {
     "partial_transcript": "",
     "trigger_search": False,
 }
-
 for k, v in SESSION_DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
 if st.session_state.dictation_queue is None:
     st.session_state.dictation_queue = queue.Queue()
 
-# =========================================================
-# Retrieval / Search Logic
-# =========================================================
 def run_search():
     query_text = st.session_state.get("query_text", "").strip()
     if not query_text:
@@ -247,29 +206,24 @@ def run_search():
         st.session_state.answer = None
         st.session_state.context_used = None
         return
-
     embed_model = get_embed_model()
     query_emb = embed_model.encode([query_text])[0]
     res = query_by_text_embedding(query_emb)
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
-
-    TOP_N = 1  # adjust if more context desired
+    TOP_N = 1
     docs_to_use = docs[:TOP_N]
     metas_to_use = metas[:TOP_N]
-
     if not docs_to_use:
         st.session_state.search_results = {"docs": [], "metas": [], "query": query_text}
         st.session_state.answer = None
         st.session_state.context_used = ""
         return
-
     st.session_state.search_results = {
         "docs": docs_to_use,
         "metas": metas_to_use,
         "query": query_text
     }
-
     context = "\n".join([str(d) for d in docs_to_use if d])
     prompt = (
         f"Answer the question based on the following context:\n{context}\n"
@@ -279,9 +233,6 @@ def run_search():
     st.session_state.answer = answer
     st.session_state.context_used = context
 
-# =========================================================
-# Query Input
-# =========================================================
 st.header("Search / Query")
 st.text_input(
     "Enter your question here:",
@@ -290,48 +241,31 @@ st.text_input(
     on_change=run_search
 )
 
-# =========================================================
-# Voice Input & Live Dictation
-# =========================================================
 st.subheader("🎤 Live Voice Query")
 auto_search = st.checkbox("Auto-search after voice", value=True)
 
-# Dictation Parameters
-CHUNK_SECONDS = 1               # how often to re-transcribe newly accumulated audio
+CHUNK_SECONDS = 1
 COMMAND_WORDS = ["enter", "go", "search", "submit", "done"]
 COMMAND_REGEX = re.compile(rf"\b({'|'.join(COMMAND_WORDS)})\b$", re.IGNORECASE)
-
-# Rolling buffer config
-MAX_SECONDS_BUFFER = 60         # maximum seconds retained inside AudioProcessor ring
+MAX_SECONDS_BUFFER = 60
 DOWNMIX_TO_MONO = True
 TARGET_SAMPLE_RATE = 16000
 ENABLE_RESAMPLE = True
 
-# ---------------------------------------------------------
-# Audio Processor using recv_queued to reduce frame drops
-# ---------------------------------------------------------
 class AudioProcessor(AudioProcessorBase):
-    """
-    Collects audio frames via recv_queued to avoid dropping frames.
-    Maintains a rolling buffer capped by MAX_SECONDS_BUFFER seconds.
-    Background thread harvests combined audio via harvest_audio().
-    """
     def __init__(self):
         self.lock = threading.Lock()
         self.sample_rate_observed = None
         self.total_samples = 0
-        self._batches = deque()        # each: np.ndarray(float32)
-        self._sample_counts = deque()  # parallel counts for trimming
-
+        self._batches = deque()
+        self._sample_counts = deque()
     def recv_queued(self, frames):
         if not frames:
             return None
-
         pcm_chunks = []
         for f in frames:
             if self.sample_rate_observed is None:
                 self.sample_rate_observed = f.sample_rate
-
             arr = f.to_ndarray()
             if arr.ndim == 2:
                 if DOWNMIX_TO_MONO:
@@ -342,24 +276,19 @@ class AudioProcessor(AudioProcessorBase):
                 if arr.dtype != np.float32:
                     arr = arr.astype(np.float32)
             pcm_chunks.append(arr)
-
         if pcm_chunks:
             merged = np.concatenate(pcm_chunks, axis=0)
             with self.lock:
                 self._batches.append(merged)
                 self._sample_counts.append(merged.shape[0])
                 self.total_samples += merged.shape[0]
-
-                # Trim buffer by time (seconds)
                 if self.sample_rate_observed:
                     max_samples = MAX_SECONDS_BUFFER * self.sample_rate_observed
                     while self.total_samples > max_samples and self._batches:
                         removed = self._batches.popleft()
                         removed_count = self._sample_counts.popleft()
                         self.total_samples -= removed_count
-
         return frames[-1]
-
     def harvest_audio(self):
         with self.lock:
             if not self._batches:
@@ -368,9 +297,6 @@ class AudioProcessor(AudioProcessorBase):
             sr = self.sample_rate_observed
         return combined, sr
 
-# ---------------------------------------------------------
-# WebRTC Streamer
-# ---------------------------------------------------------
 webrtc_ctx = webrtc_streamer(
     key="voice-query",
     mode=WebRtcMode.SENDONLY,
@@ -379,22 +305,13 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True
 )
 
-# ---------------------------------------------------------
-# Dictation Background Thread
-# ---------------------------------------------------------
 def dictation_loop():
-    """
-    Harvests audio, (optionally) resamples, transcribes, streams partial text,
-    and detects command words.
-    """
     last_text = ""
     last_transcribe_time = 0
-
     while st.session_state.dictation_active:
         if not webrtc_ctx.audio_processor:
             time.sleep(0.25)
             continue
-
         now = time.time()
         if (now - last_transcribe_time) >= CHUNK_SECONDS:
             last_transcribe_time = now
@@ -403,7 +320,6 @@ def dictation_loop():
                 if combined is not None and combined.size > 0:
                     sr = observed_sr or TARGET_SAMPLE_RATE
                     audio_for_model = combined
-
                     if ENABLE_RESAMPLE and sr != TARGET_SAMPLE_RATE:
                         try:
                             from scipy.signal import resample_poly
@@ -413,8 +329,7 @@ def dictation_loop():
                             audio_for_model = resample_poly(audio_for_model, up, down)
                             sr = TARGET_SAMPLE_RATE
                         except Exception:
-                            sr = observed_sr  # fallback (no resample)
-
+                            sr = observed_sr
                     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
                     sf.write(tmp.name, audio_for_model, sr, format="WAV")
                     result = whisper_model.transcribe(tmp.name)
@@ -424,12 +339,8 @@ def dictation_loop():
                         st.session_state.dictation_queue.put(text)
             except Exception as e:
                 st.session_state.dictation_queue.put(f"[Dictation error: {e}]")
-
         time.sleep(0.25)
 
-# ---------------------------------------------------------
-# Dictation Controls
-# ---------------------------------------------------------
 dictation_col1, dictation_col2 = st.columns([1, 1])
 with dictation_col1:
     start_pressed = st.button(
@@ -448,17 +359,12 @@ if start_pressed:
     t = threading.Thread(target=dictation_loop, daemon=True)
     st.session_state.dictation_thread = t
     t.start()
-
 if stop_pressed:
     st.session_state.dictation_active = False
 
-# ---------------------------------------------------------
-# Consume Dictation Queue
-# ---------------------------------------------------------
 latest_text = None
 while st.session_state.dictation_queue and not st.session_state.dictation_queue.empty():
     latest_text = st.session_state.dictation_queue.get()
-
 if latest_text is not None:
     working_text = latest_text
     finalize = False
@@ -483,9 +389,6 @@ if st.session_state.trigger_search:
     st.session_state.trigger_search = False
     run_search()
 
-# ---------------------------------------------------------
-# One-Shot Manual Transcription
-# ---------------------------------------------------------
 if webrtc_ctx.audio_processor:
     if st.button("📝 Transcribe Voice (One-Shot)"):
         st.info("Processing recorded audio snapshot…")
@@ -516,9 +419,6 @@ if webrtc_ctx.audio_processor:
                 if auto_search:
                     run_search()
 
-# =========================================================
-# Render Search Results
-# =========================================================
 if st.session_state.search_results is not None:
     sr = st.session_state.search_results
     if not sr["docs"]:
@@ -537,21 +437,16 @@ if st.session_state.search_results is not None:
                 st.write(f"Time: {meta.get('start'):.2f}s → {meta.get('end'):.2f}s")
             elif mtype == "image":
                 st.image(os.path.join(config.DATA_DIR, meta.get("source")))
-                # Display only EXIF items we stored (prefixed)
                 exif_display = {
                     k: v for k, v in meta.items()
                     if k.startswith("exif_")
                 }
                 if exif_display:
                     st.json(exif_display)
-
         if st.session_state.answer:
             st.subheader("LLM Answer")
             st.write(st.session_state.answer)
 
-# =========================================================
-# Re-run Answer With Different LLM Mode
-# =========================================================
 if st.session_state.search_results and st.button("Re-run Answer with Current LLM Mode"):
     context = st.session_state.context_used or ""
     query_text = st.session_state.search_results.get("query", "")
@@ -567,9 +462,6 @@ if st.session_state.search_results and st.button("Re-run Answer with Current LLM
             )
         st.experimental_rerun()
 
-# =========================================================
-# Debug Info (Optional)
-# =========================================================
 with st.expander("🔧 Debug Info", expanded=False):
     st.write("Dictation active:", st.session_state.dictation_active)
     if webrtc_ctx and webrtc_ctx.audio_processor:
