@@ -14,7 +14,7 @@ from ingestion import (
     embed_image,
     get_image_exif,
 )
-from rag_engine import (
+from rag_engine import ( 
     add_text_items,
     add_image_item,
     query_by_text_embedding,
