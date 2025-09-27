@@ -16,3 +16,4 @@ numpy
 soundfile
 docx2txt
 faster_whisper
+datetime
