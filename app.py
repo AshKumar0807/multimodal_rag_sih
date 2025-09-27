@@ -18,6 +18,7 @@ import config
 from ingestion import (
     extract_text_from_pdf,
     extract_text_from_docx,
+    extract_text_from_image,
     transcribe_audio_to_segments,
     embed_texts,
     embed_image,
@@ -162,6 +163,13 @@ if st.sidebar.button("Ingest Selected Files", disabled=not uploads):
                 if val is not None:
                     meta[f"exif_{k}"] = val
             add_image_item(make_id("img", f.name), emb, meta)
+
+            # OCR processing
+            ocr_items = extract_text_from_image(path)
+            if ocr_items:
+                embs = embed_texts(ocr_items)
+                add_text_items(ocr_items, embs)
+
             processed += 1
             progress.progress(processed / total)
             status.markdown(f"Ingested Image: **{f.name}**")
