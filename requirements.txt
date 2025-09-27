@@ -14,3 +14,4 @@ streamlit-webrtc
 av
 numpy
 soundfile
+docx2txt
