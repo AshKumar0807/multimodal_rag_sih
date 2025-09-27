@@ -46,7 +46,6 @@ if st.sidebar.button("Ingest Selected Files"):
             if items:
                 embs = embed_texts(items)
                 add_text_items(items, embs)
-        persist()
     st.success("Ingestion complete!")
 
 # Query
@@ -80,28 +79,33 @@ if webrtc_ctx.audio_processor:
 
 # Execute query
 if st.button("Search") and query_text.strip():
-    # Embed query
     embed_model = SentenceTransformer(config.EMBEDDING_MODEL)
     query_emb = embed_model.encode([query_text])[0]
     res = query_by_text_embedding(query_emb)
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
 
+    # Only keep the top relevant chunk(s)
+    TOP_N = 1  # Change this to 2, 3, etc., if you want more context
+    docs_to_use = docs[:TOP_N]
+    metas_to_use = metas[:TOP_N]
+
     st.subheader("Results & Citations")
-    for i, (doc, meta) in enumerate(zip(docs, metas), start=1):
+    for i, (doc, meta) in enumerate(zip(docs_to_use, metas_to_use), start=1):
         st.markdown(f"**[{i}] Source:** {meta.get('source')}")
-        if meta.get("type")=="text":
+        if meta.get("type") == "text":
             st.write(doc)
-        elif meta.get("type")=="audio_segment":
+        elif meta.get("type") == "audio_segment":
             st.write(f"Transcript: {doc}")
             st.audio(os.path.join(config.DATA_DIR, meta.get("source")), format="audio/wav", start_time=meta.get("start",0))
             st.write(f"Time: {meta.get('start'):.2f}s → {meta.get('end'):.2f}s")
-        elif meta.get("type")=="image":
+        elif meta.get("type") == "image":
             st.image(os.path.join(config.DATA_DIR, meta.get("source")))
             st.json(meta.get("exif", {}))
-    # Generate LLM answer
+
+    # Generate LLM answer using only top N context
     with st.spinner("Generating answer via LLM..."):
-        context = "\n".join([str(d) for d in docs if d])
+        context = "\n".join([str(d) for d in docs_to_use if d])
         prompt = f"Answer the question based on the following context:\n{context}\nQuestion: {query_text}"
         answer = run_prompt(prompt, mode="offline" if llm_mode=="Offline (Ollama)" else "online")
         st.subheader("LLM Answer")

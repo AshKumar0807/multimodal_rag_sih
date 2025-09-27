@@ -1,0 +1,10 @@
+# Python bytecode and cache
+__pycache__/
+*.pyc
+
+# ChromaDB files and folders
+chroma_db/
+chroma.sqlite3
+
+# Any .bin files in chroma_db directories
+chroma_db/**/*.bin
