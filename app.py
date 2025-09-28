@@ -1,8 +1,11 @@
 import os
 import json
 import tempfile
+import base64  # NEW
+import mimetypes  # NEW
 import numpy as np
 import datetime
+import time  # NEW
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 
@@ -24,25 +27,16 @@ from rag_engine import (
 )
 from utils import save_uploaded_file, make_id
 from ollama_client import run_prompt
-# import whisper
-# model = whisper.load_model("base", device="cpu")
 
-# Attempt to import optional voice recording component
 try:
     from audio_recorder_streamlit import audio_recorder
     AUDIO_RECORDER_AVAILABLE = True
 except ImportError:
     AUDIO_RECORDER_AVAILABLE = False
 
-# ---------------------------------------------------------------------
-# Page Setup
-# ---------------------------------------------------------------------
 st.set_page_config(page_title="Atlas", layout="wide")
 st.title("Atlas — Multimodal RAG")
 
-# ---------------------------------------------------------------------
-# Constants / Config
-# ---------------------------------------------------------------------
 MAX_METADATA_STR_LEN = 500
 SKIP_KEYS = {
     "MakerNote",
@@ -89,15 +83,11 @@ def normalize_metadata_value(v):
         v = v[:MAX_METADATA_STR_LEN] + "…"
     return v
 
-# ---------------------------------------------------------------------
-# Sidebar: LLM Mode
-# ---------------------------------------------------------------------
+# ---------------- Sidebar: LLM Mode ----------------
 st.sidebar.header("LLM Mode")
 llm_mode = st.sidebar.radio("Select LLM:", ["Offline (Ollama)", "Online (OpenAI)"])
 
-# ---------------------------------------------------------------------
-# Sidebar: File Ingestion
-# ---------------------------------------------------------------------
+# ---------------- Sidebar: File Ingestion ----------
 st.sidebar.header("Ingest Files")
 uploads = st.sidebar.file_uploader(
     "Browse files (PDF, DOCX, Images, Audio)",
@@ -212,16 +202,12 @@ if st.sidebar.button("Ingest Selected Files", disabled=not uploads):
 
     st.success("Ingestion complete!")
 
-# ---------------------------------------------------------------------
-# Embedding Model (Cached)
-# ---------------------------------------------------------------------
+# --------------- Embedding Model (Cached) ----------
 @st.cache_resource(show_spinner=False)
 def get_embed_model():
     return SentenceTransformer(config.EMBEDDING_MODEL)
 
-# ---------------------------------------------------------------------
-# Session State Defaults (Voice keys added)
-# ---------------------------------------------------------------------
+# --------------- Session State Defaults ------------
 SESSION_DEFAULTS = {
     "search_results": None,
     "answer": None,
@@ -231,14 +217,34 @@ SESSION_DEFAULTS = {
     "voice_detected_query": "",
     "voice_last_error": "",
     "voice_mode_active": False,
+    "history": [],  # NEW
 }
 for k, v in SESSION_DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ---------------------------------------------------------------------
-# Retrieval Logic
-# ---------------------------------------------------------------------
+MAX_HISTORY_LEN = 50  # NEW
+
+# --------------- Helper: History Append ------------
+def append_history_entry(query_text, docs, metas, answer):  # NEW
+    # Avoid duplicate consecutive entries with same query & answer
+    if st.session_state.history:
+        last = st.session_state.history[-1]
+        if last["query"] == query_text and last.get("answer") == answer:
+            return
+    entry = {
+        "id": make_id("hist", query_text + str(time.time())),
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "query": query_text,
+        "docs": docs,
+        "metas": metas,
+        "answer": answer,
+    }
+    st.session_state.history.append(entry)
+    if len(st.session_state.history) > MAX_HISTORY_LEN:
+        st.session_state.history = st.session_state.history[-MAX_HISTORY_LEN:]
+
+# --------------- Retrieval Logic -------------------
 def run_search():
     query_text = st.session_state.get("query_text", "").strip()
     if not query_text:
@@ -252,7 +258,6 @@ def run_search():
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
 
-    # TODO: make configurable; currently keep original TOP_N=1
     TOP_N = 1
     docs_to_use = docs[:TOP_N]
     metas_to_use = metas[:TOP_N]
@@ -279,45 +284,28 @@ def run_search():
     st.session_state.answer = answer
     st.session_state.context_used = context
 
-# ---------------------------------------------------------------------
-# Voice Utilities
-# ---------------------------------------------------------------------
+    # NEW: add to history
+    append_history_entry(query_text, docs_to_use, metas_to_use, answer)
+
+# --------------- Voice Utilities -------------------
 def transcribe_audio_bytes(audio_bytes: bytes) -> str:
-    """
-    Save the audio bytes to a permanent file in config.DATA_DIR/recordings,
-    run whisper_model.transcribe, return transcript text.
-    """
     if not audio_bytes:
         return ""
-
-    # Ensure recordings directory exists
     recordings_dir = os.path.join(config.DATA_DIR, "recordings")
     os.makedirs(recordings_dir, exist_ok=True)
-
-    # Create a unique filename based on timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     file_path = os.path.join(recordings_dir, f"recording_{timestamp}.wav")
-    print(f"Saving recording to: {file_path}")
-    # Save the recording permanently
     with open(file_path, "wb") as f:
         f.write(audio_bytes)
-
     try:
-        # Run transcription
         result = whisper_model.transcribe(file_path)
-        print(result)
         text = result.get("text", "").strip()
     except Exception as e:
         st.session_state.voice_last_error = f"Transcription error: {e}"
         text = ""
-
     return text
 
 def extract_query_from_transcript(transcript: str):
-    """
-    Extract the spoken query that appears before the LAST hot word.
-    If no hot word present, return None.
-    """
     if not transcript:
         return None
     tokens = transcript.strip().split()
@@ -337,9 +325,6 @@ def extract_query_from_transcript(transcript: str):
     return query
 
 def handle_voice_submission(transcript: str):
-    """
-    Given a full transcript, attempt to detect hot word and set query / run search.
-    """
     st.session_state.voice_transcript = transcript
     query = extract_query_from_transcript(transcript)
     if query:
@@ -348,13 +333,9 @@ def handle_voice_submission(transcript: str):
         run_search()
     else:
         st.session_state.voice_detected_query = ""
-        # No auto-run; user can accept full transcript manually.
 
-# ---------------------------------------------------------------------
-# Query Input (Text / Voice Mode)
-# ---------------------------------------------------------------------
+# --------------- Query Input (Text / Voice) --------
 st.header("Search / Query")
-
 query_mode = st.radio("Query Input Mode", ["Text", "Voice"], horizontal=True)
 
 if query_mode == "Text":
@@ -366,7 +347,6 @@ if query_mode == "Text":
         on_change=run_search
     )
 else:
-    # Voice Mode UI
     st.session_state.voice_mode_active = True
     st.markdown("**Voice Mode Active** — Press the record button, speak your query, finish with a hot word like 'enter', 'done', 'over', 'submit', 'go', or 'ok', then release.")
     if not AUDIO_RECORDER_AVAILABLE:
@@ -390,7 +370,6 @@ else:
             else:
                 st.error("No transcription text produced.")
 
-    # Display voice transcription & status
     if st.session_state.voice_transcript:
         st.subheader("Voice Transcript")
         st.write(st.session_state.voice_transcript)
@@ -398,9 +377,7 @@ else:
         if st.session_state.voice_detected_query:
             st.success(f"Detected query (before hot word): {st.session_state.voice_detected_query}")
         else:
-            st.info(
-                "No hot word detected at the end. You can still use the full transcript as the query."
-            )
+            st.info("No hot word detected at the end. You can still use the full transcript as the query.")
             if st.button("Use Full Transcript as Query"):
                 st.session_state.query_text = st.session_state.voice_transcript
                 run_search()
@@ -409,9 +386,24 @@ else:
     if st.session_state.voice_last_error:
         st.error(st.session_state.voice_last_error)
 
-# ---------------------------------------------------------------------
-# Results Display
-# ---------------------------------------------------------------------
+# --------------- Helper: File -> Data URL ---------- (NEW)
+def build_data_url(path: str, max_mb: float = 5.0):
+    """
+    Return a (url, too_big_flag). If file bigger than max_mb, we do not inline it.
+    """
+    if not os.path.exists(path):
+        return None, False
+    size_mb = os.path.getsize(path) / (1024 * 1024)
+    if size_mb > max_mb:
+        return None, True
+    mime, _ = mimetypes.guess_type(path)
+    if not mime:
+        mime = "application/octet-stream"
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    return f"data:{mime};base64,{b64}", False
+
+# --------------- Results Display -------------------
 if st.session_state.search_results is not None:
     sr = st.session_state.search_results
     if not sr["docs"]:
@@ -419,13 +411,16 @@ if st.session_state.search_results is not None:
     else:
         st.subheader("Results & Citations")
         for i, (doc, meta) in enumerate(zip(sr["docs"], sr["metas"]), start=1):
-            st.markdown(f"**[{i}] Source:** {meta.get('source')}")
+            source_name = meta.get("source")
+            st.markdown(f"**[{i}] Source:** {source_name}")
+
+            # Main content rendering
             mtype = meta.get("type")
             if mtype == "text":
                 st.write(doc)
             elif mtype == "audio_segment":
                 st.write(f"Transcript: {doc}")
-                audio_path = os.path.join(config.DATA_DIR, meta.get("source"))
+                audio_path = os.path.join(config.DATA_DIR, source_name)
                 start = meta.get("start")
                 end = meta.get("end")
                 if os.path.exists(audio_path):
@@ -433,12 +428,37 @@ if st.session_state.search_results is not None:
                 if start is not None and end is not None:
                     st.caption(f"Segment: {start:.2f}s → {end:.2f}s")
             elif mtype == "image":
-                img_path = os.path.join(config.DATA_DIR, meta.get("source"))
+                img_path = os.path.join(config.DATA_DIR, source_name)
                 if os.path.exists(img_path):
                     st.image(img_path)
                 exif_display = {k: v for k, v in meta.items() if k.startswith("exif_")}
                 if exif_display:
-                    st.json(exif_display)
+                    with st.expander("EXIF Metadata"):
+                        st.json(exif_display)
+
+            # NEW: Clickable "Open in New Tab" + Download
+            source_path = os.path.join(config.DATA_DIR, source_name) if source_name else None
+            if source_path and os.path.exists(source_path):
+                data_url, too_big = build_data_url(source_path)
+                cols = st.columns(2)
+                with cols[0]:
+                    if not too_big and data_url:
+                        st.markdown(
+                            f'<a href="{data_url}" target="_blank" rel="noopener noreferrer">Open source in new tab</a>',
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.caption("File large; use download instead.")
+                with cols[1]:
+                    with open(source_path, "rb") as f:
+                        st.download_button(
+                            "Download source",
+                            data=f,
+                            file_name=source_name,
+                            mime=mimetypes.guess_type(source_path)[0] or "application/octet-stream",
+                            key=f"dl_{i}_{source_name}"
+                        )
+
         if st.session_state.answer:
             st.subheader("LLM Answer")
             st.write(st.session_state.answer)
@@ -460,17 +480,45 @@ if st.session_state.search_results and st.button("Re-run Answer with Current LLM
                 prompt,
                 mode="offline" if llm_mode == "Offline (Ollama)" else "online"
             )
+        # Update last history entry's answer (since model changed)
+        if st.session_state.history:
+            st.session_state.history[-1]["answer"] = st.session_state.answer
         st.rerun()
 
-# ---------------------------------------------------------------------
-# Debug Info
-# ---------------------------------------------------------------------
+# --------------- Sidebar: History (NEW) ------------
+st.sidebar.header("History")
+if st.sidebar.button("Clear History", use_container_width=True, type="secondary"):
+    st.session_state.history = []
+
+if not st.session_state.history:
+    st.sidebar.caption("No history yet.")
+else:
+    # Latest first
+    hist_container = st.sidebar.container()
+    for entry in reversed(st.session_state.history):
+        label = f"{entry['query'][:40]}{'...' if len(entry['query'])>40 else ''}"
+        if hist_container.button(label, key=f"hist_btn_{entry['id']}"):
+            # Load the selected history item
+            st.session_state.query_text = entry["query"]
+            st.session_state.search_results = {
+                "docs": entry["docs"],
+                "metas": entry["metas"],
+                "query": entry["query"]
+            }
+            st.session_state.answer = entry.get("answer")
+            st.session_state.context_used = "\n".join(
+                [str(d) for d in entry["docs"] if d]
+            )
+            # st.experimental_rerun()
+
+# --------------- Debug Info ------------------------
 with st.expander("🔧 Debug Info", expanded=False):
     st.write("Search query:", st.session_state.get("query_text"))
     if st.session_state.search_results:
         st.write("Num result docs:", len(st.session_state.search_results.get("docs", [])))
     st.write("LLM mode:", llm_mode)
     st.write("Voice mode active:", st.session_state.voice_mode_active)
+    st.write("History length:", len(st.session_state.history))
     if st.session_state.voice_transcript:
         st.write("Raw voice transcript length:", len(st.session_state.voice_transcript))
         st.write("Detected query (voice):", st.session_state.voice_detected_query)
