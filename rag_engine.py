@@ -56,4 +56,9 @@ def get_all_items():
     return collection.get()
 
 def persist():
-    pass  # Persistence is automatic with PersistentClient
+    pass
+def add_image_item(id: str, embedding: list, meta: dict):
+    meta = {k: v for k, v in meta.items() if v is not None}
+    # Provide a minimal placeholder so the LLM can reference something
+    placeholder_doc = f"[Image: {meta.get('source','unknown')}]"
+    collection.add(ids=[id], embeddings=[embedding], metadatas=[meta], documents=[placeholder_doc])# Persistence is automatic with PersistentClient
